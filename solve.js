@@ -363,73 +363,90 @@ function findSingleStar(s, from) {
   return -1;
 }
 
+/** The characters that change inline rendering: the marks, and the HTML-escapable ones. */
+const INLINE_RE = /[\\`*[\[&<>"']/g;
+
 /**
  * `s` rendered inline; `env.link(target)` is a link's href.
  *
- * The reference renders one character at a time, escaping each as it goes; this
- * version does exactly the same, but gathers the plain characters between the
- * marks into runs and escapes each run in one pass. HTML escaping is a
- * per-character substitution, so a run escaped together is identical to the same
- * characters escaped one by one — the output cannot differ.
+ * One native scan finds every character that matters — a mark or one of the
+ * five HTML-escapable characters. The plain text between them is appended as
+ * it stands (nothing in it needs escaping, since the scan already found every
+ * escapable character), and each escapable character is replaced by its
+ * entity on the spot. That is exactly what escaping each plain run in one
+ * pass does, so the output is identical to the reference's
+ * one-character-at-a-time rendering. The scan's lastIndex is reset at every
+ * entry and after every mark, so the recursive calls for strong, emphasis and
+ * link text cannot disturb the outer scan.
  */
 function inline(s, env) {
   let out = '';
   let i = 0;
-  let run = 0;
-  while (i < s.length) {
-    const c = s[i];
-    if (c === '\\' || c === '`' || c === '*' || c === '[') {
-      if (i > run) out += escapeHtml(s.slice(run, i));
-      if (c === '\\' && i + 1 < s.length && ESCAPABLE.has(s[i + 1])) {
-        out += escapeHtml(s[i + 1]);
-        i += 2;
-      } else if (c === '`') {
-        const j = s.indexOf('`', i + 1);
-        if (j > i + 1) {
-          out += `<code>${escapeHtml(s.slice(i + 1, j))}</code>`;
-          i = j + 1;
-        } else {
-          out += '`';
-          i++;
-        }
-      } else if (c === '*') {
-        if (s[i + 1] === '*') {
-          const j = findUnescaped(s, '**', i + 2);
-          if (j > i + 2) {
-            out += `<strong>${inline(s.slice(i + 2, j), env)}</strong>`;
-            i = j + 2;
-          } else {
-            out += '**';
-            i += 2;
-          }
-        } else {
-          const j = findSingleStar(s, i + 1);
-          if (j > i + 1) {
-            out += `<em>${inline(s.slice(i + 1, j), env)}</em>`;
-            i = j + 1;
-          } else {
-            out += '*';
-            i++;
-          }
-        }
-      } else {
-        const k = findUnescaped(s, ']', i + 1);
-        const m = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
-        const target = m === -1 ? '' : s.slice(k + 2, m);
-        if (target !== '' && !/\s/.test(target)) {
-          out += `<a href="${escapeHtml(env.link(target))}">${inline(s.slice(i + 1, k), env)}</a>`;
-          i = m + 1;
-        } else {
-          out += '[';
-          i++;
-        }
-      }
-      run = i;
+  INLINE_RE.lastIndex = 0;
+  let m;
+  while ((m = INLINE_RE.exec(s)) !== null) {
+    const j = m.index;
+    const c = s[j];
+    if (c === '&' || c === '<' || c === '>' || c === '"' || c === "'") {
+      out += s.slice(i, j);
+      out += ESCAPES[c];
+      i = j + 1;
       continue;
     }
-    i++;
+    out += s.slice(i, j);
+    if (c === '\\') {
+      if (j + 1 < s.length && ESCAPABLE.has(s[j + 1])) {
+        const n = s[j + 1];
+        out += ESCAPES[n] ?? n;
+        i = j + 2;
+      } else {
+        out += '\\';
+        i = j + 1;
+      }
+    } else if (c === '`') {
+      const k = s.indexOf('`', j + 1);
+      if (k > j + 1) {
+        out += `<code>${escapeHtml(s.slice(j + 1, k))}</code>`;
+        i = k + 1;
+      } else {
+        out += '`';
+        i = j + 1;
+      }
+    } else if (c === '*') {
+      if (s[j + 1] === '*') {
+        const k = findUnescaped(s, '**', j + 2);
+        if (k > j + 2) {
+          out += `<strong>${inline(s.slice(j + 2, k), env)}</strong>`;
+          i = k + 2;
+        } else {
+          out += '**';
+          i = j + 2;
+        }
+      } else {
+        const k = findSingleStar(s, j + 1);
+        if (k > j + 1) {
+          out += `<em>${inline(s.slice(j + 1, k), env)}</em>`;
+          i = k + 1;
+        } else {
+          out += '*';
+          i = j + 1;
+        }
+      }
+    } else {
+      const k = findUnescaped(s, ']', j + 1);
+      const t = k !== -1 && s[k + 1] === '(' ? s.indexOf(')', k + 2) : -1;
+      const target = t === -1 ? '' : s.slice(k + 2, t);
+      if (target !== '' && !/\s/.test(target)) {
+        out += `<a href="${escapeHtml(env.link(target))}">${inline(s.slice(j + 1, k), env)}</a>`;
+        i = t + 1;
+      } else {
+        out += '[';
+        i = j + 1;
+      }
+    }
+    INLINE_RE.lastIndex = i;
   }
-  if (s.length > run) out += escapeHtml(s.slice(run));
+  out += s.slice(i);
   return out;
 }
 
